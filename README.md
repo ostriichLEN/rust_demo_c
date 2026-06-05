@@ -5,6 +5,9 @@
 核心故事：
 
 ```text
+Stage 0: Rust compiler safety demos
+  mpsc / Rayon 錯誤寫法在編譯期被擋下，展示 ownership、Send、parallel closure safety
+
 Stage 1: C ticket service variants
   unsafe shared counter 展示 race condition；mutex 修正；queue 模式對照 Rust mpsc
 
@@ -32,6 +35,9 @@ Stage 3: Rayon batch analytics
 │   └── ticket_race.c          # C unsafe / mutex / queue 對照
 ├── docs/
 │   └── demo_script_zh.md      # demo 影片錄製腳本
+├── safety_demos/              # Rust compile-fail / safe parallel examples
+├── scripts/
+│   └── run_safety_demos.ps1   # 一次執行安全性 demo
 ├── src/
 │   └── main.rs                # Rust mpsc + Rayon platform demo
 ├── Cargo.toml
@@ -39,6 +45,19 @@ Stage 3: Rayon batch analytics
 ```
 
 ## 快速執行
+
+### Stage 0：Rust 編譯期安全性 demo
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_safety_demos.ps1
+```
+
+觀察重點：
+
+- `mpsc_use_after_send.rs` 會被 E0382 擋下：資料被送進 channel 後，原本變數不能再被使用。
+- `mpsc_non_send_rc.rs` 會被 E0277 擋下：`Rc<T>` 不是 `Send`，不能跨 thread 傳送。
+- `rayon_shared_mutation` 會被 E0596 擋下：Rayon parallel closure 不允許任意修改外部共享 `Vec`。
+- `rayon_safe_fold` 會成功：使用 `fold/reduce` 建立 thread-local 結果後再合併。
 
 ### Stage 1：C race condition 與 producer-consumer queue
 
@@ -143,8 +162,10 @@ sales records
 - C 可以用 mutex 修正，但保護 shared mutable state 的責任主要落在工程師紀律。
 - C 也可以手寫 bounded queue 做出類似 Rust `mpsc` 的架構，但需要自行維護 circular buffer、mutex、condition variable 與 close 條件。
 - `mpsc` 把多個 producers 與單一 consumer 串起來，讓庫存 ownership 集中在中央服務。
+- Rust `mpsc` 會結合 ownership 與 `Send` bound，讓錯誤的跨 thread 資料傳遞在編譯期被擋下。
 - bounded channel 可以表現 backpressure，這是高併發系統常見的流量控制設計。
 - Rayon 適合互相獨立的資料處理，用 `par_iter`、`fold`、`reduce` 把 batch analytics 分散到多核心 CPU。
+- Rayon 的 parallel iterator API 會避免 closure 任意修改外部共享可變資料，促使開發者使用 `fold/reduce` 這類可安全合併的模式。
 - `mpsc` 是 live task flow；Rayon 是 batch data parallelism。兩者同屬並行程式設計，但解決的軟體工程問題不同。
 
 ## 參考資料

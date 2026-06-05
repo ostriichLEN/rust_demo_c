@@ -14,10 +14,11 @@
 
 我們會看三個階段：
 
-1. C 的共享變數造成超賣。
-2. C 用 mutex 修正共享 counter，再用手寫 queue 做出 producer-consumer 架構。
-3. Rust 用 `mpsc` 把多個前端訂單送到中央售票服務，對照 C queue 的工程負擔。
-4. 售票結束後，用 Rayon 對大量銷售紀錄做平行分析。
+1. Rust 編譯器如何擋下錯誤的 mpsc / Rayon 並行寫法。
+2. C 的共享變數造成超賣。
+3. C 用 mutex 修正共享 counter，再用手寫 queue 做出 producer-consumer 架構。
+4. Rust 用 `mpsc` 把多個前端訂單送到中央售票服務，對照 C queue 的工程負擔。
+5. 售票結束後，用 Rayon 對大量銷售紀錄做平行分析。
 
 系統必須維持兩個 business invariants：
 
@@ -25,6 +26,25 @@
 sold + remaining == initial_inventory
 sold + rejected == submitted_orders
 ```
+
+## Part 0：Rust 編譯期安全性 demo
+
+執行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_safety_demos.ps1
+```
+
+講解：
+
+- 第一個失敗案例會出現 E0382：`String` 被送進 `mpsc` channel 後，原變數不能再使用，因為 ownership 已經移動。
+- 第二個失敗案例會出現 E0277：`Rc<String>` 不是 `Send`，Rust 不允許它跨 thread 傳送。
+- 第三個失敗案例會出現 E0596：Rayon parallel closure 不允許直接修改外部共享 `Vec`。
+- 最後一個成功案例使用 Rayon `fold/reduce`，每個 worker 先累積 local result，再安全合併。
+
+補充講法：
+
+> 這些不是效能數字，而是 Rust 相對 C 手寫 pthread queue 的重要優勢：很多可能造成 data race 或 ownership bug 的寫法，在執行前就被編譯器擋下。
 
 ## Part 1：C unsafe race condition
 
@@ -152,6 +172,7 @@ cargo run --release -- all --tickets 100 --producers 16 --orders 80 --queue-capa
 ```text
 C unsafe shared counter -> 會破壞售票 invariant
 C queue ticket office -> 用手寫 pthread queue 達到 message passing 架構
+Rust compile-time checks -> ownership、Send、Rayon closure safety 直接擋下錯誤
 Rust mpsc order service -> 用 message passing 與 ownership boundary 管理即時訂單
 Rayon batch analytics -> 用資料平行加速大量售後統計
 ```
