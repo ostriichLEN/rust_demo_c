@@ -15,7 +15,7 @@ Stage 2: Rust mpsc order service
   多個前端節點送訂單到 bounded channel，由單一中央售票服務處理庫存
 
 Stage 3: Rayon batch analytics
-  售票結束後，對大量銷售紀錄做 sequential vs parallel 批次分析
+  售票結束後，對大量銷售紀錄做 sequential vs parallel 批次分析，並可對照 C OpenMP
 ```
 
 ## 為什麼這樣設計
@@ -33,11 +33,13 @@ Stage 3: Rayon batch analytics
 .
 ├── c_demo/
 │   └── ticket_race.c          # C unsafe / mutex / queue 對照
+│   └── openmp_analytics.c     # C OpenMP batch analytics，對照 Rayon
 ├── docs/
 │   └── demo_script_zh.md      # demo 影片錄製腳本
 ├── safety_demos/              # Rust compile-fail / safe parallel examples
 ├── scripts/
 │   └── run_safety_demos.ps1   # 一次執行安全性 demo
+│   └── run_openmp_vs_rayon.ps1 # C OpenMP vs Rust Rayon 對照
 ├── src/
 │   └── main.rs                # Rust mpsc + Rayon platform demo
 ├── Cargo.toml
@@ -93,6 +95,21 @@ cargo run --release -- mpsc --tickets 100 --producers 16 --orders 80 --queue-cap
 cargo run --release -- rayon --analytics-records 1000000 --producers 16
 ```
 
+對照 C OpenMP 與 Rust Rayon：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_openmp_vs_rayon.ps1 1000000 16
+```
+
+手動執行 OpenMP：
+
+```powershell
+gcc c_demo/openmp_analytics.c -O2 -fopenmp -o target/c_openmp_analytics.exe
+.\target\c_openmp_analytics.exe 1000000 16
+```
+
+如果 Windows Defender 或防毒軟體阻擋 MinGW OpenMP 產生的 exe，這通常是本機安全軟體對 OpenMP runtime 的誤判；可以改在 WSL/Linux、MSVC OpenMP 環境，或加入明確允許後再測。
+
 ## Rust mpsc demo 展示什麼
 
 Rust `mpsc` 這段可以直接對照 C 的 `queue` 模式：
@@ -128,7 +145,7 @@ front-end producer N ----/
 
 其中 `--queue-capacity` 可以展示 bounded queue。容量越小、`--service-delay-us` 越大，producer 越容易因 backpressure 等待。
 
-## Rayon demo 展示什麼
+## Rayon 與 OpenMP demo 展示什麼
 
 Rayon 這段模擬售票結束後的批次報表：
 
@@ -156,6 +173,15 @@ sales records
 
 注意：不同電腦、資料量、CPU core 數會影響 Rayon 是否明顯更快。錄影時可以把 `--analytics-records` 調高，例如 `1000000` 或 `2000000`。
 
+C OpenMP 的 `c_demo/openmp_analytics.c` 做同樣型態的批次分析。它的比較重點是：
+
+| 面向 | C OpenMP | Rust Rayon |
+|---|---|---|
+| 平行化方式 | `#pragma omp parallel for` / reduction | `par_iter` / `fold` / `reduce` |
+| 程式碼風格 | 在迴圈上加 compiler directive | 使用 Rust iterator API |
+| 資料安全 | 需要開發者正確設計 reduction / shared variables | closure trait、ownership、Send/Sync 會參與編譯期檢查 |
+| 適合展示 | 傳統 C/C++ HPC 平行迴圈 | Rust 資料平行 API 與型別安全 |
+
 ## 報告可以使用的工程結論
 
 - Race condition 是 business invariant 被破壞，不只是程式碼「跑起來怪怪的」。
@@ -166,6 +192,7 @@ sales records
 - bounded channel 可以表現 backpressure，這是高併發系統常見的流量控制設計。
 - Rayon 適合互相獨立的資料處理，用 `par_iter`、`fold`、`reduce` 把 batch analytics 分散到多核心 CPU。
 - Rayon 的 parallel iterator API 會避免 closure 任意修改外部共享可變資料，促使開發者使用 `fold/reduce` 這類可安全合併的模式。
+- Rayon 的合理性能對照是 OpenMP，因為兩者都處理 CPU-bound data parallelism；`mpsc` 則是另一類 live message-passing 問題。
 - `mpsc` 是 live task flow；Rayon 是 batch data parallelism。兩者同屬並行程式設計，但解決的軟體工程問題不同。
 
 ## 參考資料

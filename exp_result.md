@@ -296,15 +296,76 @@ cargo run --release -- rayon --analytics-records 2000000 --producers 16
 - speedup 從 6.57x 提升到 7.86x，表示資料量越大，Rayon 的平行化成本越容易被攤平。
 - sequential result equals parallel result 仍為 true，代表平行化後仍保持計算正確性。
 
-## 8. 實驗五：完整 all 流程
+## 8. 實驗五：Rayon 與 OpenMP 對照設計
 
 ### 8.1 執行指令
+
+```powershell
+gcc c_demo/openmp_analytics.c -O2 -fopenmp -o target/c_openmp_analytics.exe
+.\target\c_openmp_analytics.exe 1000000 16
+cargo run --release -- rayon --analytics-records 1000000 --producers 16
+```
+
+或使用整合腳本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_openmp_vs_rayon.ps1 1000000 16
+```
+
+### 8.2 對照目的
+
+Rayon 的合理比較對象是 OpenMP，而不是 `mpsc`。原因是 Rayon 和 OpenMP 都是資料平行工具，適合處理大量互相獨立的 CPU-bound 工作，例如售後銷售紀錄分析。
+
+本專案的 OpenMP 程式 `c_demo/openmp_analytics.c` 使用和 Rayon 相同型態的資料集與統計項目：
+
+- revenue
+- regular / VIP count
+- high value sales
+- fraud / manual review candidates
+- busiest source
+- checksum
+
+### 8.3 比較重點
+
+| 面向 | C OpenMP | Rust Rayon |
+|---|---|---|
+| 平行化方式 | `#pragma omp parallel for` 與 reduction | `par_iter`、`fold`、`reduce` |
+| 資料切分 | 由 OpenMP runtime 切分迴圈 | 由 Rayon work-stealing thread pool 切分 iterator |
+| 共享狀態處理 | 開發者要明確設計 reduction 或 thread-local buffer | API 鼓勵 local fold，再 reduce 合併 |
+| 編譯期安全 | C 編譯器較難阻止不安全 shared mutation | Rust/Rayon 會拒絕不安全的 captured mutable state |
+| 報告定位 | 傳統 C/C++ HPC 平行迴圈 | Rust 資料平行與型別安全結合 |
+
+### 8.4 本機執行狀況
+
+在目前 Windows / MinGW 環境中，OpenMP 程式可以成功編譯：
+
+```powershell
+gcc c_demo/openmp_analytics.c -O2 -fopenmp -o target/c_openmp_analytics.exe
+```
+
+但執行時被 Windows Defender / 安全軟體阻擋：
+
+```text
+程式無法執行: 因為檔案包含病毒或潛在的垃圾軟體，所以作業未順利完成。
+```
+
+因此本次報告不應假造 OpenMP performance 數據。比較時可以採用以下說法：
+
+- Rayon 的 performance 數據已在本機成功取得。
+- OpenMP 對照程式已完成，設計上與 Rayon 做同類型 batch analytics。
+- 若要取得 OpenMP 實測數據，建議改在 WSL/Linux、MSVC OpenMP 環境，或將該 exe 加入本機安全軟體允許清單後再測。
+
+這個限制不影響本實驗的設計結論：Rayon 應該和 OpenMP 比較，因為兩者都是資料平行工具；`mpsc` 則應該和 C pthread queue / producer-consumer 架構比較。
+
+## 9. 實驗六：完整 all 流程
+
+### 9.1 執行指令
 
 ```powershell
 cargo run --release -- all --tickets 100 --producers 16 --orders 80 --queue-capacity 32 --analytics-records 500000
 ```
 
-### 8.2 mpsc 即時訂單服務數據
+### 9.2 mpsc 即時訂單服務數據
 
 | 指標 | 數值 |
 |---|---:|
@@ -321,7 +382,7 @@ cargo run --release -- all --tickets 100 --producers 16 --orders 80 --queue-capa
 | cumulative producer send wait | 20.0003366s |
 | elapsed | 1.3245338s |
 
-### 8.3 Rayon 批次分析數據
+### 9.3 Rayon 批次分析數據
 
 | 指標 | 數值 |
 |---|---:|
@@ -339,7 +400,7 @@ cargo run --release -- all --tickets 100 --producers 16 --orders 80 --queue-capa
 | busiest source sales | 31,279 |
 | checksum | 3316827 |
 
-### 8.4 步驟含意
+### 9.4 步驟含意
 
 `all` 模式把 Rust 平台 demo 串起來。實際錄製時，建議先執行 C 的三種模式：`unsafe`、`mutex`、`queue`。這樣可以先看到錯誤共享 counter、手動加鎖修正、手寫 producer-consumer queue 三種設計，再接著執行 Rust `mpsc` 即時訂單服務與 Rayon 批次分析。
 
@@ -351,7 +412,7 @@ cargo run --release -- all --tickets 100 --producers 16 --orders 80 --queue-capa
 - Rust `mpsc`：展示標準 channel 如何表達即時訂單處理與 backpressure。
 - Rayon：展示大量售後資料的平行分析。
 
-## 9. Rayon 資料量比較
+## 10. Rayon 資料量比較
 
 | 資料筆數 | Sequential | Parallel | Speedup |
 |---:|---:|---:|---:|
@@ -366,7 +427,7 @@ cargo run --release -- all --tickets 100 --producers 16 --orders 80 --queue-capa
 - 資料量越大，Rayon 的 thread pool、工作切分與 reduce 成本越容易被大量運算攤平，因此 speedup 更明顯。
 - 500,000 筆時 speedup 為 3.48x，2,000,000 筆時提升到 7.86x，代表 Rayon 更適合有足夠資料量的 CPU-bound 批次工作。
 
-## 10. 實驗結論
+## 11. 實驗結論
 
 本實驗可以得到以下結論：
 
@@ -394,12 +455,16 @@ cargo run --release -- all --tickets 100 --producers 16 --orders 80 --queue-capa
 
    Rayon 的強項在於將大量彼此獨立的資料處理平行化。本實驗中 revenue、票種統計、異常候選訂單與來源統計都能用 `par_iter`、`fold`、`reduce` 處理，且 parallel result 與 sequential result 完全一致。
 
-7. 資料量越大，Rayon 效益越明顯。
+7. Rayon 的合理對照組是 OpenMP。
+
+   Rayon 和 OpenMP 都是 data parallelism 工具，適合比較大量資料分析的 sequential / parallel speedup。OpenMP 對照程式已新增為 `c_demo/openmp_analytics.c`，但本機 Windows Defender 阻擋 MinGW OpenMP binary 執行，因此本次不假造 OpenMP 效能數據。後續若在 WSL/Linux 或 MSVC OpenMP 環境執行，就能取得 C OpenMP 與 Rust Rayon 的直接 performance 對照。
+
+8. 資料量越大，Rayon 效益越明顯。
 
    1,000,000 筆資料時 speedup 為 6.57x，2,000,000 筆資料時 speedup 提升到 7.86x。這表示當資料量足夠大時，平行化成本會被攤平，多核心 CPU 的優勢更容易被觀察到。
 
-8. `mpsc` 與 Rayon 都屬於並行程式設計工具，但解決的問題不同。
+9. `mpsc` 與 Rayon 都屬於並行程式設計工具，但解決的問題不同。
 
    `mpsc` 解決的是 live task flow、message passing 與 ownership boundary；Rayon 解決的是 batch data parallelism。將兩者放在同一個售票平台的不同子系統中，比把兩者硬套在同一個扣票流程中更符合軟體工程實務。
 
-總結來說，本專案現在形成更完整的對照：Rust safety demos 展示編譯期擋錯，C unsafe 展示 race condition 的錯誤後果，C mutex 展示手動加鎖修正，C queue 展示手寫 message passing 架構，Rust `mpsc` 展示標準 channel 與 ownership boundary 的表達方式，Rayon 則展示售後批次資料分析的平行化。這比單純把 C 和 Rayon 放在一起比較更合理，也更能凸顯 Rust 在並行程式設計中「執行前先排除一部分錯誤」的特色。
+總結來說，本專案現在形成更完整的對照：Rust safety demos 展示編譯期擋錯，C unsafe 展示 race condition 的錯誤後果，C mutex 展示手動加鎖修正，C queue 對照 Rust `mpsc` 的 message passing 架構，OpenMP 對照 Rayon 的資料平行架構。這樣的分組比單純把所有工具放在同一個售票 counter 上比較更合理，也更能凸顯 Rust 在並行程式設計中「執行前先排除一部分錯誤」與「用高階 API 表達平行資料流」的特色。

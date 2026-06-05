@@ -19,6 +19,7 @@
 3. C 用 mutex 修正共享 counter，再用手寫 queue 做出 producer-consumer 架構。
 4. Rust 用 `mpsc` 把多個前端訂單送到中央售票服務，對照 C queue 的工程負擔。
 5. 售票結束後，用 Rayon 對大量銷售紀錄做平行分析。
+6. 最後用 OpenMP 對照 Rayon，說明兩者都是資料平行工具。
 
 系統必須維持兩個 business invariants：
 
@@ -115,7 +116,7 @@ cargo run --release -- mpsc --tickets 100 --producers 16 --orders 80 --queue-cap
 
 觀察 `producer sends delayed by backpressure` 是否變多。
 
-## Part 3：Rayon 售後批次分析
+## Part 3：Rayon 售後批次分析，並對照 OpenMP
 
 執行：
 
@@ -151,6 +152,19 @@ busiest source
 cargo run --release -- rayon --analytics-records 2000000 --producers 16
 ```
 
+接著執行 OpenMP / Rayon 對照：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_openmp_vs_rayon.ps1 1000000 16
+```
+
+講解：
+
+- OpenMP 是 C/C++ 常見的資料平行工具，通常用 `#pragma omp parallel for` 讓迴圈平行化。
+- Rayon 是 Rust 的資料平行工具，用 `par_iter`、`fold`、`reduce` 寫成 iterator pipeline。
+- 兩者比較的是 batch analytics performance，不是即時訂單流程。
+- 如果 Windows Defender 阻擋 OpenMP exe，報告時要說明這是本機安全軟體對 MinGW OpenMP binary 的執行阻擋，不是 OpenMP 程式碼設計失敗。
+
 ## Part 4：完整串接
 
 執行：
@@ -175,6 +189,7 @@ C queue ticket office -> 用手寫 pthread queue 達到 message passing 架構
 Rust compile-time checks -> ownership、Send、Rayon closure safety 直接擋下錯誤
 Rust mpsc order service -> 用 message passing 與 ownership boundary 管理即時訂單
 Rayon batch analytics -> 用資料平行加速大量售後統計
+OpenMP analytics -> C/C++ 常見資料平行對照組
 ```
 
 所以 `mpsc` 和 Rayon 都是 Rust 並行程式設計的重要工具，但它們應該放在不同的工程問題裡展示。
