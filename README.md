@@ -5,8 +5,8 @@
 核心故事：
 
 ```text
-Stage 1: C unsafe counter
-  展示 race condition 如何造成超賣
+Stage 1: C ticket service variants
+  unsafe shared counter 展示 race condition；mutex 修正；queue 模式對照 Rust mpsc
 
 Stage 2: Rust mpsc order service
   多個前端節點送訂單到 bounded channel，由單一中央售票服務處理庫存
@@ -29,7 +29,7 @@ Stage 3: Rayon batch analytics
 ```text
 .
 ├── c_demo/
-│   └── ticket_race.c          # C unsafe / mutex race-condition 對照
+│   └── ticket_race.c          # C unsafe / mutex / queue 對照
 ├── docs/
 │   └── demo_script_zh.md      # demo 影片錄製腳本
 ├── src/
@@ -40,19 +40,21 @@ Stage 3: Rayon batch analytics
 
 ## 快速執行
 
-### Stage 1：C race condition
+### Stage 1：C race condition 與 producer-consumer queue
 
 ```powershell
 New-Item -ItemType Directory -Force -Path target
 gcc c_demo/ticket_race.c -O2 -pthread -o target/c_ticket_race.exe
 .\target\c_ticket_race.exe unsafe 100 16 80
 .\target\c_ticket_race.exe mutex 100 16 80
+.\target\c_ticket_race.exe queue 100 16 80 32 500
 ```
 
 觀察重點：
 
 - `unsafe` 通常會出現 `oversold: true` 或 invariant false。
 - `mutex` 會修正結果，但 C 端仍靠工程師自己記得保護 critical section。
+- `queue` 使用 `pthread_mutex`、`pthread_cond_t` 和手寫 bounded queue，做出和 Rust `mpsc` 類似的 producer-consumer 架構。
 
 ### Stage 2 + Stage 3：Rust 完整平台 demo
 
@@ -73,6 +75,15 @@ cargo run --release -- rayon --analytics-records 1000000 --producers 16
 ```
 
 ## Rust mpsc demo 展示什麼
+
+Rust `mpsc` 這段可以直接對照 C 的 `queue` 模式：
+
+| 面向 | C queue | Rust mpsc |
+|---|---|---|
+| 訂單傳遞 | 手寫 circular buffer | 標準函式庫 channel |
+| 同步機制 | 手動管理 mutex / condition variable | `sync_channel` 封裝同步細節 |
+| 庫存所有權 | 由程式設計者約定 ticket office 擁有 | ownership 與型別系統讓資料流更明確 |
+| 風險 | 容易寫錯 lock、signal、close 條件 | 較少手寫同步原語，錯誤面較小 |
 
 Rust `mpsc` 這段模擬多個前端節點同時送訂單：
 
@@ -130,6 +141,7 @@ sales records
 
 - Race condition 是 business invariant 被破壞，不只是程式碼「跑起來怪怪的」。
 - C 可以用 mutex 修正，但保護 shared mutable state 的責任主要落在工程師紀律。
+- C 也可以手寫 bounded queue 做出類似 Rust `mpsc` 的架構，但需要自行維護 circular buffer、mutex、condition variable 與 close 條件。
 - `mpsc` 把多個 producers 與單一 consumer 串起來，讓庫存 ownership 集中在中央服務。
 - bounded channel 可以表現 backpressure，這是高併發系統常見的流量控制設計。
 - Rayon 適合互相獨立的資料處理，用 `par_iter`、`fold`、`reduce` 把 batch analytics 分散到多核心 CPU。
@@ -142,4 +154,3 @@ sales records
 - Rayon 官方 docs.rs 文件：https://docs.rs/rayon/
 - 使用者提供的 iThome 參考文章：https://ithelp.ithome.com.tw/m/articles/10376807
 - 使用者提供的 iThome 參考文章：https://ithelp.ithome.com.tw/articles/10367508
-

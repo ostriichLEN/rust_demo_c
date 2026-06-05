@@ -6,7 +6,7 @@
 
 一句話版本：
 
-> C unsafe counter 展示 race condition；Rust mpsc 展示即時訂單服務；Rayon 展示售後批次分析。
+> C unsafe counter 展示 race condition；C queue 與 Rust mpsc 對照即時訂單服務；Rayon 展示售後批次分析。
 
 ## 開場講法
 
@@ -15,8 +15,9 @@
 我們會看三個階段：
 
 1. C 的共享變數造成超賣。
-2. Rust 用 `mpsc` 把多個前端訂單送到中央售票服務。
-3. 售票結束後，用 Rayon 對大量銷售紀錄做平行分析。
+2. C 用 mutex 修正共享 counter，再用手寫 queue 做出 producer-consumer 架構。
+3. Rust 用 `mpsc` 把多個前端訂單送到中央售票服務，對照 C queue 的工程負擔。
+4. 售票結束後，用 Rayon 對大量銷售紀錄做平行分析。
 
 系統必須維持兩個 business invariants：
 
@@ -45,6 +46,7 @@ gcc c_demo/ticket_race.c -O2 -pthread -o target/c_ticket_race.exe
 
 ```powershell
 .\target\c_ticket_race.exe mutex 100 16 80
+.\target\c_ticket_race.exe queue 100 16 80 32 500
 ```
 
 講解：
@@ -52,6 +54,8 @@ gcc c_demo/ticket_race.c -O2 -pthread -o target/c_ticket_race.exe
 - `pthread_mutex` 把查票與扣票包成 critical section。
 - 這可以修正 race condition。
 - 但 C 不會強制每個共享狀態都必須被保護，安全性仰賴工程師紀律。
+- `queue` 模式把多個 producer 的訂單送進手寫 bounded queue，再由單一 ticket office thread 處理庫存。
+- 這個模式和 Rust `mpsc` 是真正的架構對照：兩者都讓單一 consumer 擁有庫存，但 C 需要手動處理 mutex、condition variable、queue close 條件與記憶體配置。
 
 ## Part 2：Rust mpsc 即時訂單服務
 
@@ -81,7 +85,7 @@ producer sends delayed by backpressure
 
 補充講法：
 
-> 這裡 mpsc 的重點不是速度，而是 live system 中的訊息傳遞與 ownership boundary。bounded channel 還能讓我們觀察 backpressure，也就是中央服務處理不夠快時，producer 會被迫等待。
+> 這裡 mpsc 的重點不是速度，而是 live system 中的訊息傳遞與 ownership boundary。C queue 和 Rust mpsc 做的是類似架構，但 Rust 的標準 channel 幫我們封裝很多同步細節；bounded channel 還能讓我們觀察 backpressure，也就是中央服務處理不夠快時，producer 會被迫等待。
 
 可以再跑一次小 queue：
 
@@ -147,9 +151,9 @@ cargo run --release -- all --tickets 100 --producers 16 --orders 80 --queue-capa
 
 ```text
 C unsafe shared counter -> 會破壞售票 invariant
+C queue ticket office -> 用手寫 pthread queue 達到 message passing 架構
 Rust mpsc order service -> 用 message passing 與 ownership boundary 管理即時訂單
 Rayon batch analytics -> 用資料平行加速大量售後統計
 ```
 
 所以 `mpsc` 和 Rayon 都是 Rust 並行程式設計的重要工具，但它們應該放在不同的工程問題裡展示。
-
